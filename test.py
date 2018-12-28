@@ -28,10 +28,10 @@ from neurosat import NeuroSAT
 parser = argparse.ArgumentParser()
 add_neurosat_options(parser)
 
-parser.add_argument('test_dir', action='store', type=str, help='Directory with directories of testation data')
-parser.add_argument('restore_id', action='store', type=int)
-parser.add_argument('restore_epoch', action='store', type=int)
-parser.add_argument('n_rounds', action='store', type=int)
+parser.add_argument('--test_dir', action='store', dest='test_dir', type=str, help='Directory with directories of testation data')
+parser.add_argument('--restore_id', action='store', dest='restore_id', type=int)
+parser.add_argument('--restore_epoch', action='store', dest='restore_epoch', type=int)
+# parser.add_argument('--n_rounds', action='store', dest='n_rounds', type=int)
 
 opts = parser.parse_args()
 setattr(opts, 'run_id', None)
@@ -43,5 +43,5 @@ g = NeuroSAT(opts)
 g.restore()
 
 results = g.test(opts.test_dir)
-for (test_filename, etest_cost, etest_mat) in results:
-    print("%s %.4f (%.2f, %.2f, %.2f, %.2f)" % (test_filename, etest_cost, etest_mat.ff, etest_mat.ft, etest_mat.tf, etest_mat.tt))
+for (test_filename, etest_cost, accuracy_by_var, accuracy_by_problem) in results:
+    print("%s %.4f (accuracy by var: %.4f | accuracy by problem: %.4f)" % (test_filename, etest_cost, accuracy_by_var, accuracy_by_problem))

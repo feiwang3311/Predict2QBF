@@ -1,4 +1,4 @@
-# Copyright 2018 Daniel Selsam. All Rights Reserved.
+#Copyright 2018 Daniel Selsam. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ from problems_loader import init_problems_loader
 from mlp import MLP
 from util import repeat_end, decode_final_reducer, decode_transfer_fn
 from tensorflow.contrib.rnn import LSTMStateTuple
-from sklearn.cluster import KMeans
+# from sklearn.cluster import KMeans
 
 class NeuroSAT(object):
     def __init__(self, opts):
@@ -61,8 +61,8 @@ class NeuroSAT(object):
             self.C_update2 = tf.contrib.rnn.LayerNormBasicLSTMCell(self.opts.d, activation=decode_transfer_fn(opts.lstm_transfer_fn))
 
             self.A_vote = MLP(opts, opts.d, repeat_end(opts.d, opts.n_vote_layers, 1), name=("A_vote"))
-            self.L_vote = MLP(opts, opts.d, repeat_end(opts.d, opts.n_vote_layers, 1), name=("L_vote"))
-            self.vote_bias = tf.get_variable(name="vote_bias", shape=[], initializer=tf.zeros_initializer())
+            # self.L_vote = MLP(opts, opts.d, repeat_end(opts.d, opts.n_vote_layers, 1), name=("L_vote"))
+            # self.vote_bias = tf.get_variable(name="vote_bias", shape=[], initializer=tf.zeros_initializer())
 
     def declare_placeholders(self):
         self.n_A_vars = tf.placeholder(tf.int32, shape=[], name='n_A_vars')
@@ -73,12 +73,16 @@ class NeuroSAT(object):
 
         self.A_unpack = tf.sparse_placeholder(tf.float32, shape=[None, None], name='A_unpack')
         self.L_unpack = tf.sparse_placeholder(tf.float32, shape=[None, None], name='L_unpack')
-        self.is_sat = tf.placeholder(tf.bool, shape=[None], name='is_sat')
+        # self.is_sat = tf.placeholder(tf.bool, shape=[None], name='is_sat')
+        self.labels = tf.placeholder(tf.int32, shape=[None, None, 2], name='labels')
 
         # useful helpers
-        self.n_batches = tf.shape(self.is_sat)[0]
+        # self.n_batches = tf.shape(self.is_sat)[0]
+        self.n_batches = tf.shape(self.labels)[0]
         self.n_A_vars_per_batch = tf.div(self.n_A_vars, self.n_batches)
         self.n_L_vars_per_batch = tf.div(self.n_L_vars, self.n_batches)
+        # self.n_A_vars_per_batch = tf.placeholder(tf.int32, shape=[], name='n_A_vars_per_batch')
+        # self.n_L_vars_per_batch = tf.placeholder(tf.int32, shape=[], name='n_L_vars_per_batch')
 
     def while_cond(self, i, L_state, C_state, A_state):
         return tf.less(i, self.opts.n_rounds)
@@ -125,23 +129,25 @@ class NeuroSAT(object):
             _, L_state, C_state, A_state = tf.while_loop(self.while_cond, self.while_body, [0, L_state, C_state, A_state])
 
         self.final_A_lits = A_state.h
-        self.final_L_lits = L_state.h
-        self.final_clauses = C_state.h
+        # self.final_L_lits = L_state.h
+        # self.final_clauses = C_state.h
         
     def compute_logits(self):
         with tf.name_scope('compute_logits') as scope:
-            self.all_votes_A = self.A_vote.forward(self.final_A_lits) # n_lits x 1
-            self.all_votes_L = self.L_vote.forward(self.final_L_lits) # n_lits x 1
+            self.all_votes_A = self.A_vote.forward(self.final_A_lits) # n_A_lits x 1
+            # self.all_votes_L = self.L_vote.forward(self.final_L_lits) # n_L_lits x 1
             self.all_votes_join_A = tf.concat([self.all_votes_A[0:self.n_A_vars], self.all_votes_A[self.n_A_vars:self.n_A_lits]], axis=1)
-            self.all_votes_join_L = tf.concat([self.all_votes_L[0:self.n_L_vars], self.all_votes_L[self.n_L_vars:self.n_L_lits]], axis=1)
+            # self.all_votes_join_L = tf.concat([self.all_votes_L[0:self.n_L_vars], self.all_votes_L[self.n_L_vars:self.n_L_lits]], axis=1)
             self.all_votes_batched_A = tf.reshape(self.all_votes_join_A, [self.n_batches, self.n_A_vars_per_batch, 2])
-            self.all_votes_batched_L = tf.reshape(self.all_votes_join_L, [self.n_batches, self.n_L_vars_per_batch, 2])
+            # self.all_votes_batched_L = tf.reshape(self.all_votes_join_L, [self.n_batches, self.n_L_vars_per_batch, 2])
 
             # try to use only A_votes for logits?
-            self.logits = self.final_reducer(self.all_votes_batched_A) + self.vote_bias# + self.final_reducer(self.all_votes_batched_L) 
+            self.logits = self.all_votes_batched_A 
+            # self.final_reducer(self.all_votes_batched_A) + self.vote_bias# + self.final_reducer(self.all_votes_batched_L) 
 
     def compute_cost(self):
-        self.predict_costs = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.is_sat, tf.float32))
+        # self.predict_costs = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.labels, tf.float32))
+        self.predict_costs = tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.logits, labels=tf.cast(self.labels, tf.float32))
         self.predict_cost = tf.reduce_mean(self.predict_costs)
 
         with tf.name_scope('l2') as scope:
@@ -214,7 +220,8 @@ class NeuroSAT(object):
                                                  values=np.ones(problem.A_unpack_indices.shape[0]),
                                                  dense_shape=[problem.n_lits_AL[0], problem.n_clauses])
 
-        d[self.is_sat] = problem.is_sat
+        # d[self.is_sat] = problem.is_sat
+        d[self.labels] = problem.labels
         return d
 
     def train_epoch(self, epoch):
@@ -224,23 +231,40 @@ class NeuroSAT(object):
         epoch_start = time.clock()
 
         epoch_train_cost = 0.0
-        epoch_train_mat = ConfusionMatrix()
+        accuracy_by_var = []
+        accuracy_by_problem = []
+        # epoch_train_mat = ConfusionMatrix()
 
         train_problems, train_filename = self.train_problems_loader.get_next()
         for problem in train_problems:
             d = self.build_feed_dict(problem)
             _, logits, cost = self.sess.run([self.apply_gradients, self.logits, self.cost], feed_dict=d)
             epoch_train_cost += cost
-            epoch_train_mat.update(problem.is_sat, logits > 0)
+            (av, ap) = self.accuracy(np.array(logits), np.array(problem.labels))
+            accuracy_by_var.append(av)
+            accuracy_by_problem.append(ap)
+            # epoch_train_mat.update(problem.is_sat, logits > 0)
 
         epoch_train_cost /= len(train_problems)
-        epoch_train_mat = epoch_train_mat.get_percentages()
+        av_ac_by_var = np.mean(accuracy_by_var)
+        av_ac_by_pro = np.mean(accuracy_by_problem)
+        # epoch_train_mat = epoch_train_mat.get_percentages()
         epoch_end = time.clock()
 
         learning_rate = self.sess.run(self.learning_rate)
         self.save(epoch)
 
-        return (train_filename, epoch_train_cost, epoch_train_mat, learning_rate, epoch_end - epoch_start)
+        return (train_filename, epoch_train_cost, av_ac_by_var, av_ac_by_pro, learning_rate, epoch_end - epoch_start)
+
+    def accuracy(self, logits, labels):
+        assert(logits.shape == labels.shape), 'shape of logits and labels are not the same {} != {}'.format(logits.shape, labels.shape)
+        logit_assign = np.argmax(logits, axis = -1)
+        label_assign = np.argmax(labels, axis = -1)
+        same = np.equal(logit_assign, label_assign)
+        accuracy_by_var = np.sum(same.astype(np.float32)) / np.sum(np.ones_like(same, dtype=np.float32))
+        all_same = np.all(same, axis = -1)
+        accuracy_by_problem = np.sum(all_same.astype(np.float32)) / np.sum(np.ones_like(all_same, dtype=np.float32))
+        return accuracy_by_var, accuracy_by_problem
 
     def test(self, test_data_dir):
         test_problems_loader = init_problems_loader(test_data_dir)
@@ -250,18 +274,25 @@ class NeuroSAT(object):
             test_problems, test_filename = test_problems_loader.get_next()
 
             epoch_test_cost = 0.0
-            epoch_test_mat = ConfusionMatrix()
+            accuracy_by_vars = []
+            accuracy_by_prob = []
+            # epoch_test_mat = ConfusionMatrix()
 
             for problem in test_problems:
                 d = self.build_feed_dict(problem)
                 logits, cost = self.sess.run([self.logits, self.cost], feed_dict=d)
                 epoch_test_cost += cost
-                epoch_test_mat.update(problem.is_sat, logits > 0)
+                (ac_by_var, ac_by_pro) = self.accuracy(np.array(logits), np.array(problem.labels))
+                accuracy_by_vars.append(ac_by_var)
+                accuracy_by_prob.append(ac_by_pro)
+                # epoch_test_mat.update(problem.is_sat, logits > 0)
 
             epoch_test_cost /= len(test_problems)
-            epoch_test_mat = epoch_test_mat.get_percentages()
+            av_ac_by_var = np.mean(accuracy_by_vars)
+            av_ac_by_pro = np.mean(accuracy_by_prob)
+            # epoch_test_mat = epoch_test_mat.get_percentages()
 
-            results.append((test_filename, epoch_test_cost, epoch_test_mat))
+            results.append((test_filename, epoch_test_cost, av_ac_by_var, av_ac_by_pro))
 
         return results
 

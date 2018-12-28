@@ -21,6 +21,7 @@ import random
 import pickle
 import argparse
 import sys
+import subprocess
 from mk_problem import mk_batch_problem_2QBF
 
 def parse_dimacs(filename):
@@ -106,9 +107,23 @@ for filename in filenames:
     prev_n_vars = n_vars
 
     # is_sat, stats = solve_sat(n_vars, iclauses)
-    assert ('sat' in filename) or ('unsat' in filename)
-    is_sat = ('unsat' not in filename)
-    problems.append((filename, specs, sizes, iclauses, is_sat))
+    # call cadet solver, assert the result is unsat and generate labels for the problem
+    file1 = os.path.join(opts.dimacs_dir, filename) 
+    print("running cadet on {}\n".format(file1))
+    result = subprocess.run(['/homes/wang603/QBF/QBFSolvers/cadet/cadet', file1], stdout=subprocess.PIPE)
+    result = result.stdout.decode('utf-8').split('\n')
+    assert('UNSAT' in result), 'problem must be unsat, but got {}'.format(result)
+    result = result[result.index('UNSAT') + 1].split()
+    assert (result[0] == 'V'), 'label should start with V, but got {}'.format(result)
+    result = result[1:]
+    result = list(map(int, result))
+    result_abs = list(map(abs, result))
+    assert result_abs == list(range(1, len(result) + 1)), 'labels is not correctly formatted: {}'.format(result)
+    labels = list(map(lambda x: [0, 1] if x < 0 else [1, 0], result))
+
+    # assert ('sat' in filename) or ('unsat' in filename)
+    # is_sat = ('unsat' not in filename)
+    problems.append((filename, specs, sizes, iclauses, labels))
     n_nodes_in_batch += n_nodes
 
 if len(problems) > 0:
