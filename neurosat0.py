@@ -28,7 +28,7 @@ from util import repeat_end, decode_final_reducer, decode_transfer_fn
 from tensorflow.contrib.rnn import LSTMStateTuple
 # from sklearn.cluster import KMeans
 
-class NeuroSAT(object):
+class NeuroSAT0(object):
     def __init__(self, opts):
         self.opts = opts
 
@@ -49,8 +49,7 @@ class NeuroSAT(object):
         with tf.variable_scope('params') as scope:
             self.A_init = tf.get_variable(name="A_init", initializer=tf.random_normal([1, self.opts.d]))
             self.L_init = tf.get_variable(name="L_init", initializer=tf.random_normal([1, self.opts.d]))
-            self.CA_init = tf.get_variable(name="CA_init", initializer=tf.random_normal([1, self.opts.d]))
-            self.CL_init = tf.get_variable(name="CL_init", initializer=tf.random_normal([1, self.opts.d]))
+            self.C_init = tf.get_variable(name="C_init", initializer=tf.random_normal([1, self.opts.d]))
 
             self.A_msg = MLP(opts, opts.d, repeat_end(opts.d, opts.n_msg_layers, opts.d), name=("A_msg"))
             self.L_msg = MLP(opts, opts.d, repeat_end(opts.d, opts.n_msg_layers, opts.d), name=("L_msg"))
@@ -59,8 +58,8 @@ class NeuroSAT(object):
 
             self.A_update = tf.contrib.rnn.LayerNormBasicLSTMCell(self.opts.d, activation=decode_transfer_fn(opts.lstm_transfer_fn))
             self.L_update = tf.contrib.rnn.LayerNormBasicLSTMCell(self.opts.d, activation=decode_transfer_fn(opts.lstm_transfer_fn))
-            self.CA_update = tf.contrib.rnn.LayerNormBasicLSTMCell(self.opts.d, activation=decode_transfer_fn(opts.lstm_transfer_fn))
-            self.CL_update = tf.contrib.rnn.LayerNormBasicLSTMCell(self.opts.d, activation=decode_transfer_fn(opts.lstm_transfer_fn))
+            self.C_update = tf.contrib.rnn.LayerNormBasicLSTMCell(self.opts.d, activation=decode_transfer_fn(opts.lstm_transfer_fn))
+#            self.C_update2 = tf.contrib.rnn.LayerNormBasicLSTMCell(self.opts.d, activation=decode_transfer_fn(opts.lstm_transfer_fn))
 
             self.A_vote = MLP(opts, opts.d, repeat_end(opts.d, opts.n_vote_layers, 1), name=("A_vote"))
             # self.L_vote = MLP(opts, opts.d, repeat_end(opts.d, opts.n_vote_layers, 1), name=("L_vote"))
@@ -86,36 +85,35 @@ class NeuroSAT(object):
         # self.n_A_vars_per_batch = tf.placeholder(tf.int32, shape=[], name='n_A_vars_per_batch')
         # self.n_L_vars_per_batch = tf.placeholder(tf.int32, shape=[], name='n_L_vars_per_batch')
 
-    def while_cond(self, i, A_state, L_state, CA_state, CL_state):
+    def while_cond(self, i, L_state, C_state, A_state):
         return tf.less(i, self.opts.n_rounds)
 
     def flip(self, lits, size):
         return tf.concat([lits[size : (2 * size), :], lits[0 : size, :]], axis=0)
 
-    def while_body(self, i, A_state, L_state, CA_state, CL_state):
+    def while_body(self, i, L_state, C_state, A_state):
         A_pre_msgs = self.A_msg.forward(A_state.h)
         AC_msgs = tf.sparse_tensor_dense_matmul(self.A_unpack, A_pre_msgs, adjoint_a=True)
 
         L_pre_msgs = self.L_msg.forward(L_state.h)
         LC_msgs = tf.sparse_tensor_dense_matmul(self.L_unpack, L_pre_msgs, adjoint_a=True)
 
-        ALC_msgs = tf.concat([AC_msgs, LC_msgs], axis=1)
-        with tf.variable_scope('CA_update') as scope:
-            _, CA_state = self.CA_update(inputs=ALC_msgs, state=CA_state)
-        with tf.variable_scope('CL_update') as scope:
-            _, CL_state = self.CL_update(inputs=ALC_msgs, state=CL_state)
+        with tf.variable_scope('C_update') as scope:
+            _, C_state = self.C_update(inputs=tf.concat([AC_msgs, LC_msgs], axis=1), state=C_state)
+#        with tf.variable_scope('C_update2') as scope:
+#            _, C_state = self.C_update2(inputs=AC_msgs, state=C_state)
 
-        CA_pre_msgs = self.CA_msg.forward(CA_state.h)
-        CL_pre_msgs = self.CL_msg.forward(CL_state.h)
+        CA_pre_msgs = self.CA_msg.forward(C_state.h)
+        CL_pre_msgs = self.CL_msg.forward(C_state.h)
         CA_msgs = tf.sparse_tensor_dense_matmul(self.A_unpack, CA_pre_msgs)
         CL_msgs = tf.sparse_tensor_dense_matmul(self.L_unpack, CL_pre_msgs)
 
-        with tf.variable_scope('A_update') as scope:
-            _, A_state = self.A_update(inputs=tf.concat([CA_msgs, self.flip(A_state.h, self.n_A_vars)], axis=1), state=A_state)
         with tf.variable_scope('L_update') as scope:
             _, L_state = self.L_update(inputs=tf.concat([CL_msgs, self.flip(L_state.h, self.n_L_vars)], axis=1), state=L_state)
+        with tf.variable_scope('A_update') as scope:
+            _, A_state = self.A_update(inputs=tf.concat([CA_msgs, self.flip(A_state.h, self.n_A_vars)], axis=1), state=A_state)
 
-        return i+1, A_state, L_state, CA_state, CL_state
+        return i+1, L_state, C_state, A_state
 
     def pass_messages(self):
         with tf.name_scope('pass_messages') as scope:
@@ -123,15 +121,13 @@ class NeuroSAT(object):
 
             A_output = tf.tile(tf.div(self.A_init, denom), [self.n_A_lits, 1])
             L_output = tf.tile(tf.div(self.L_init, denom), [self.n_L_lits, 1])
-            CA_output = tf.tile(tf.div(self.CA_init, denom), [self.n_clauses, 1])
-            CL_output = tf.tile(tf.div(self.CL_init, denom), [self.n_clauses, 1])
+            C_output = tf.tile(tf.div(self.C_init, denom), [self.n_clauses, 1])
 
             A_state = LSTMStateTuple(h=A_output, c=tf.zeros([self.n_A_lits, self.opts.d]))
             L_state = LSTMStateTuple(h=L_output, c=tf.zeros([self.n_L_lits, self.opts.d]))
-            CA_state = LSTMStateTuple(h=CA_output, c=tf.zeros([self.n_clauses, self.opts.d]))
-            CL_state = LSTMStateTuple(h=CL_output, c=tf.zeros([self.n_clauses, self.opts.d]))
+            C_state = LSTMStateTuple(h=C_output, c=tf.zeros([self.n_clauses, self.opts.d]))
 
-            _, A_state, L_state, CA_state, CL_state = tf.while_loop(self.while_cond, self.while_body, [0, A_state, L_state, CA_state, CL_state])
+            _, L_state, C_state, A_state = tf.while_loop(self.while_cond, self.while_body, [0, L_state, C_state, A_state])
 
         self.final_A_lits = A_state.h
         # self.final_L_lits = L_state.h
